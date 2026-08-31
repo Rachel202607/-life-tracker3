@@ -2,37 +2,36 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
+  <!-- 鎖定放大比例，防止 iPhone 自動亂放大 -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>LifeTracker</title>
   
-  <!-- 載入 Tailwind CSS -->
+  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <!-- 載入 Lucide Icons (Web Font 版) -->
-  <link rel="stylesheet" href="https://unpkg.com/lucide-static@0.263.1/font/lucide.css">
-
-  <!-- 載入 React 相關 -->
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- React & ReactDOM -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  
+
   <style>
     /* 隱藏滾動條但保留滾動功能 */
     .hide-scrollbar::-webkit-scrollbar { display: none; }
     .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    html, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; overflow-x: hidden; }
+    
+    /* 確保所有輸入框在 iOS Safari 不會觸發自動放大 (字體 >= 16px) */
+    input, textarea, select { font-size: 16px !important; }
   </style>
 </head>
 <body class="bg-slate-50 antialiased text-gray-800">
-
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useMemo } = React;
-
-    // 模擬 Firebase 相關函數 (因為沒有後端，改為使用 localStorage 來模擬)
-    // 這樣你在手機上用 Safari 開啟時，資料會存在你的手機瀏覽器裡
-    const db = {}; 
-    const mockUser = { uid: 'local-user' };
+    const { useState, useEffect, useMemo, useRef } = React;
 
     // --- 輔助函數 ---
     const getTodayString = () => {
@@ -53,20 +52,34 @@
       return '晚安，放鬆一下';
     };
 
-    // 簡易的 Icon 替代方案，使用 lucide css 類別或 emoji
-    const Icon = ({ name, size=24, className="" }) => {
-       const iconMap = {
-           'home': '🏠', 'target': '🎯', 'book': '📖', 'line-chart': '📈',
-           'plus': '➕', 'check': '✔️', 'x': '✖️', 'moon': '🌙',
-           'brain': '🧠', 'smile': '😊', 'activity': '💓', 'sun': '☀️',
-           'cloud': '☁️', 'cloud-sun': '⛅', 'cloud-rain': '🌧️', 'cloud-lightning': '⛈️',
-           'clock': '🕒', 'pill': '💊', 'zap': '⚡', 'calendar': '📅',
-           'sparkles': '✨', 'chevron-down': '🔽', 'chevron-up': '🔼',
-           'history': '🕰️', 'edit-3': '✏️', 'coffee': '☕'
-       };
-       return <span className={className} style={{ fontSize: `${size}px`, lineHeight: 1 }}>{iconMap[name.toLowerCase()] || name}</span>;
-    }
+    // --- 自訂圖示渲染組件 (修復圖示消失問題) ---
+    const Icon = ({ name, size = 24, className = "" }) => {
+      const iconRef = useRef(null);
+      useEffect(() => {
+        if (iconRef.current && window.lucide) {
+          // 將圖示名稱轉換格式以匹配 Lucide
+          let iconName = name;
+          // 將 kebab-case 轉換為 PascalCase
+          const pascalName = name.split('-').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join('');
+          
+          let iconObj = window.lucide.icons[pascalName] || window.lucide.icons[name];
+          
+          if (iconObj) {
+            const svg = window.lucide.createElement(iconObj);
+            svg.setAttribute('width', size);
+            svg.setAttribute('height', size);
+            svg.setAttribute('stroke-width', 2.5);
+            iconRef.current.innerHTML = '';
+            iconRef.current.appendChild(svg);
+          } else {
+              console.warn(`Icon ${name} not found`);
+          }
+        }
+      }, [name, size]);
+      return <span ref={iconRef} className={`inline-flex items-center justify-center shrink-0 ${className}`} style={{ width: size, height: size }}></span>;
+    };
 
+    // --- 選項常數 ---
     const MOODS = [
       { value: 1, emoji: '😭', label: '極差' },
       { value: 2, emoji: '😕', label: '不好' },
@@ -88,14 +101,26 @@
       { id: 'fruit_tea', label: '果茶', emoji: '🍹' }
     ];
 
+    // --- 主程式 ---
     function App() {
-      const [user, setUser] = useState(mockUser);
       const [activeTab, setActiveTab] = useState('today');
       const [isLoading, setIsLoading] = useState(true);
-
       const [weather, setWeather] = useState({ temp: '--', text: '載入中', code: 0 });
 
-      // 使用 localStorage 模擬數據狀態
+      // 本地存儲存取邏輯
+      const STORAGE_KEY_PREFIX = 'lifetracker_local_';
+      const saveData = (key, data) => {
+        try { localStorage.setItem(`${STORAGE_KEY_PREFIX}${key}`, JSON.stringify(data)); } 
+        catch (e) { console.error("Local storage save error", e); }
+      };
+      const loadData = (key, defaultData) => {
+        try {
+          const saved = localStorage.getItem(`${STORAGE_KEY_PREFIX}${key}`);
+          return saved ? JSON.parse(saved) : defaultData;
+        } catch (e) { return defaultData; }
+      };
+
+      // 數據狀態
       const [todayLog, setTodayLog] = useState({ 
         mood: 0, migraine: 0, sleepHours: '', diary: '', completedHabits: [],
         hadBeverage: 'none', beverageName: '', beverageTime: ''
@@ -122,16 +147,6 @@
 
       const todayStr = getTodayString();
 
-      // --- 本地存儲存取邏輯 (取代 Firebase) ---
-      const saveData = (key, data) => {
-        localStorage.setItem(`lifetracker_${key}`, JSON.stringify(data));
-      };
-
-      const loadData = (key, defaultData) => {
-        const saved = localStorage.getItem(`lifetracker_${key}`);
-        return saved ? JSON.parse(saved) : defaultData;
-      };
-
       // 初始化載入資料
       useEffect(() => {
         const loadedLogs = loadData('daily_logs', []);
@@ -149,7 +164,7 @@
         setIsLoading(false);
       }, []);
 
-      // 儲存 todayLog
+      // 儲存邏輯
       useEffect(() => {
         if(isLoading) return;
         const newLogs = allLogs.filter(l => l.id !== todayStr);
@@ -158,13 +173,12 @@
         saveData('daily_logs', newLogs);
       }, [todayLog]);
 
-      // 儲存其他陣列資料
       useEffect(() => { if(!isLoading) saveData('todos', todos); }, [todos]);
       useEffect(() => { if(!isLoading) saveData('habits', habits); }, [habits]);
       useEffect(() => { if(!isLoading) saveData('plans', plans); }, [plans]);
       useEffect(() => { if(!isLoading) saveData('diaries', diaries); }, [diaries]);
 
-
+      // 載入天氣
       useEffect(() => {
         const fetchWeather = async (lat = 25.0330, lon = 121.5654) => {
           try {
@@ -201,12 +215,7 @@
         setMigraineTimeInput(todayLog.migraineStartTime || '');
         setMigraineTriggerInput(todayLog.migraineTrigger || '');
         setBeverageTimeInput(todayLog.beverageTime || '');
-      }, [
-        todayLog.migraineMedication, 
-        todayLog.migraineStartTime, 
-        todayLog.migraineTrigger,
-        todayLog.beverageTime
-      ]);
+      }, [todayLog.migraineMedication, todayLog.migraineStartTime, todayLog.migraineTrigger, todayLog.beverageTime]);
 
       const updateTodayLog = (field, value) => {
         setTodayLog(prev => ({ ...prev, [field]: value }));
@@ -231,11 +240,6 @@
         setDiaryInput('');
         setSaveStatus('已儲存');
         setTimeout(() => setSaveStatus(''), 3000);
-        
-        setTimeout(() => {
-          const historySection = document.getElementById('diary-history');
-          if (historySection) historySection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 100);
       };
 
       const editDiary = (diary) => {
@@ -244,827 +248,503 @@
         window.scrollTo({ top: 0, behavior: 'smooth' }); 
       };
 
-      const deleteDiaryItem = (id) => {
-        setDiaries(prev => prev.filter(d => d.id !== id));
-      };
+      const deleteDiaryItem = (id) => { setDiaries(prev => prev.filter(d => d.id !== id)); };
 
       const addItem = (e) => {
         e.preventDefault();
         if (!newItemText.trim()) return;
-        
         if (newItemType === 'todo') {
-           const newTodo = { id: Date.now().toString(), text: newItemText.trim(), completed: false, createdAt: Date.now(), date: todayStr };
-           setTodos(prev => [newTodo, ...prev]);
+           setTodos(prev => [{ id: Date.now().toString(), text: newItemText.trim(), completed: false, createdAt: Date.now(), date: todayStr }, ...prev]);
         } else {
-           const newHabit = { id: Date.now().toString(), text: newItemText.trim(), createdAt: Date.now() };
-           setHabits(prev => [...prev, newHabit]);
+           setHabits(prev => [...prev, { id: Date.now().toString(), text: newItemText.trim(), createdAt: Date.now() }]);
         }
         setNewItemText('');
       };
 
       const toggleHabit = (habitId) => {
         const currentCompleted = todayLog.completedHabits || [];
-        const isCompleted = currentCompleted.includes(habitId);
-        const newCompleted = isCompleted 
-          ? currentCompleted.filter(id => id !== habitId)
-          : [...currentCompleted, habitId];
+        const newCompleted = currentCompleted.includes(habitId) ? currentCompleted.filter(id => id !== habitId) : [...currentCompleted, habitId];
         updateTodayLog('completedHabits', newCompleted);
       };
 
-      const deleteHabit = (id) => {
-         setHabits(prev => prev.filter(h => h.id !== id));
-      };
-
-      const toggleTodo = (id) => {
-         setTodos(prev => prev.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
-      };
-
-      const deleteTodo = (id) => {
-         setTodos(prev => prev.filter(t => t.id !== id));
-      };
+      const deleteHabit = (id) => { setHabits(prev => prev.filter(h => h.id !== id)); };
+      const toggleTodo = (id) => { setTodos(prev => prev.map(t => t.id === id ? { ...t, completed: !t.completed } : t)); };
+      const deleteTodo = (id) => { setTodos(prev => prev.filter(t => t.id !== id)); };
 
       const addPlan = (e) => {
         e.preventDefault();
         if (!newPlan.trim()) return;
-        const p = { id: Date.now().toString(), title: newPlan.trim(), progress: 0, createdAt: Date.now() };
-        setPlans(prev => [p, ...prev]);
+        setPlans(prev => [{ id: Date.now().toString(), title: newPlan.trim(), progress: 0, createdAt: Date.now() }, ...prev]);
         setNewPlan('');
       };
+      const updatePlanProgress = (id, progress) => { setPlans(prev => prev.map(p => p.id === id ? { ...p, progress } : p)); };
+      const deletePlan = (id) => { setPlans(prev => prev.filter(p => p.id !== id)); };
 
-      const updatePlanProgress = (id, progress) => {
-         setPlans(prev => prev.map(p => p.id === id ? { ...p, progress } : p));
+      const handleExport = () => {
+        const exportData = {
+          daily_logs: allLogs, todos: todos, habits: habits, plans: plans, diaries: diaries,
+          exportDate: new Date().toISOString()
+        };
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData));
+        const downloadAnchorNode = document.createElement('a');
+        downloadAnchorNode.setAttribute("href", dataStr);
+        downloadAnchorNode.setAttribute("download", `LifeTracker_Backup_${getTodayString()}.json`);
+        document.body.appendChild(downloadAnchorNode); 
+        downloadAnchorNode.click();
+        downloadAnchorNode.remove();
+        alert("資料已成功打包成檔案並下載！請儲存好這個檔案。");
       };
 
-      const deletePlan = (id) => {
-         setPlans(prev => prev.filter(p => p.id !== id));
+      const handleImport = (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const importedData = JSON.parse(e.target.result);
+            if(importedData.daily_logs) {
+              setAllLogs(importedData.daily_logs);
+              const todayData = importedData.daily_logs.find(l => l.id === todayStr) || { 
+                id: todayStr, mood: 0, migraine: 0, sleepHours: '', completedHabits: [], hadBeverage: 'none', beverageName: '', beverageTime: ''
+              };
+              setTodayLog(todayData);
+            }
+            if(importedData.todos) setTodos(importedData.todos);
+            if(importedData.habits) setHabits(importedData.habits);
+            if(importedData.plans) setPlans(importedData.plans);
+            if(importedData.diaries) setDiaries(importedData.diaries);
+            alert("備份資料還原成功！");
+          } catch (error) {
+            alert("還原失敗，請確定選擇了正確的 JSON 備份檔案。");
+          }
+        };
+        reader.readAsText(file);
+        event.target.value = '';
       };
 
       const insights = useMemo(() => {
         if (allLogs.length === 0) return null;
-
-        let totalSleep = 0, sleepCount = 0;
-        let migraineDays = 0;
-        let moodSum = 0, moodCount = 0;
-        
-        let sleepWithMigraine = [];
-        let sleepWithoutMigraine = [];
+        let totalSleep = 0, sleepCount = 0, migraineDays = 0, moodSum = 0, moodCount = 0;
+        let sleepWithMigraine = [], sleepWithoutMigraine = [];
 
         allLogs.forEach(log => {
           const sleep = parseFloat(log.sleepHours);
           if (!isNaN(sleep) && sleep > 0) {
-            totalSleep += sleep;
-            sleepCount++;
-            
-            if (log.migraine > 0) {
-              sleepWithMigraine.push(sleep);
-            } else {
-              sleepWithoutMigraine.push(sleep);
-            }
+            totalSleep += sleep; sleepCount++;
+            if (log.migraine > 0) sleepWithMigraine.push(sleep);
+            else sleepWithoutMigraine.push(sleep);
           }
-          
           if (log.migraine > 0) migraineDays++;
-          
-          if (log.mood > 0) {
-            moodSum += log.mood;
-            moodCount++;
-          }
+          if (log.mood > 0) { moodSum += log.mood; moodCount++; }
         });
-
-        const avgSleep = sleepCount > 0 ? (totalSleep / sleepCount).toFixed(1) : 0;
-        const avgMood = moodCount > 0 ? (moodSum / moodCount).toFixed(1) : 0;
-        
-        const avgSleepMigraine = sleepWithMigraine.length > 0 
-          ? (sleepWithMigraine.reduce((a,b)=>a+b,0) / sleepWithMigraine.length).toFixed(1) 
-          : '無數據';
-        const avgSleepNoMigraine = sleepWithoutMigraine.length > 0 
-          ? (sleepWithoutMigraine.reduce((a,b)=>a+b,0) / sleepWithoutMigraine.length).toFixed(1) 
-          : '無數據';
 
         return {
           totalDays: allLogs.length,
-          avgSleep,
+          avgSleep: sleepCount > 0 ? (totalSleep / sleepCount).toFixed(1) : 0,
           migraineRate: Math.round((migraineDays / allLogs.length) * 100) || 0,
-          avgMood,
-          correlation: { avgSleepMigraine, avgSleepNoMigraine }
+          avgMood: moodCount > 0 ? (moodSum / moodCount).toFixed(1) : 0,
+          correlation: { 
+            avgSleepMigraine: sleepWithMigraine.length > 0 ? (sleepWithMigraine.reduce((a,b)=>a+b,0) / sleepWithMigraine.length).toFixed(1) : '無數據', 
+            avgSleepNoMigraine: sleepWithoutMigraine.length > 0 ? (sleepWithoutMigraine.reduce((a,b)=>a+b,0) / sleepWithoutMigraine.length).toFixed(1) : '無數據' 
+          }
         };
       }, [allLogs]);
 
       const renderWeatherIcon = () => {
         const code = weather.code;
-        if ([95, 96, 99].includes(code)) return <Icon name="cloud-lightning" size={22} className="text-indigo-500" />;
-        if ([51, 53, 55, 61, 63, 65, 80, 81, 82].includes(code)) return <Icon name="cloud-rain" size={22} className="text-blue-500" />;
-        if (code === 3) return <Icon name="cloud" size={22} className="text-slate-400" />;
-        if ([1, 2].includes(code)) return <Icon name="cloud-sun" size={22} className="text-amber-500" />;
-        return <Icon name="sun" size={22} className="text-amber-500" />;
+        if ([95, 96, 99].includes(code)) return <Icon name="cloud-lightning" size={28} className="text-indigo-500" />;
+        if ([51, 53, 55, 61, 63, 65, 80, 81, 82].includes(code)) return <Icon name="cloud-rain" size={28} className="text-blue-500" />;
+        if (code === 3) return <Icon name="cloud" size={28} className="text-slate-400" />;
+        if ([1, 2].includes(code)) return <Icon name="cloud-sun" size={28} className="text-amber-500" />;
+        return <Icon name="sun" size={28} className="text-amber-500" />;
       };
 
-      const validHealthLogs = useMemo(() => {
-        return allLogs.filter(l => l.mood > 0 || l.migraine > 0 || l.sleepHours || l.hadBeverage === 'drank');
-      }, [allLogs]);
-
+      const validHealthLogs = useMemo(() => allLogs.filter(l => l.mood > 0 || l.migraine > 0 || l.sleepHours || l.hadBeverage === 'drank'), [allLogs]);
       const displayedHealthLogs = showAllHealthLogs ? validHealthLogs : validHealthLogs.slice(0, 5);
       const displayedDiaries = showAllDiaries ? diaries : diaries.slice(0, 5);
 
-      if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-50 text-indigo-500 font-medium tracking-wide">載入中...</div>;
+      if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-50 text-indigo-500 text-lg font-medium tracking-wide">載入中...</div>;
 
       return (
-        <div className="min-h-screen bg-slate-50 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-50/60 via-slate-50 to-sky-50/40 font-sans text-gray-800 pb-32 selection:bg-indigo-100">
+        <div className="min-h-screen bg-slate-50 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-50/60 via-slate-50 to-sky-50/40 font-sans text-gray-800 pb-32">
           
-          {/* 頂部總覽區 */}
-          <header className="px-6 pt-12 pb-3 max-w-lg mx-auto relative z-10 flex justify-between items-end">
+          <header className="px-6 pt-12 pb-4 max-w-lg mx-auto relative z-10 flex justify-between items-end">
             <div className="space-y-1">
-              <p className="text-xs font-semibold text-indigo-500 tracking-wider uppercase flex items-center gap-1.5">
-                <Icon name="calendar" size={13} className="text-indigo-400" />
+              <p className="text-sm font-bold text-indigo-500 tracking-wider uppercase flex items-center gap-1.5">
+                <Icon name="calendar" size={16} className="text-indigo-400" />
                 {getFormattedDate()}
               </p>
-              <h1 className="text-2xl font-extrabold text-gray-800 tracking-tight">{getGreeting()}</h1>
+              <h1 className="text-3xl font-extrabold text-gray-800 tracking-tight">{getGreeting()}</h1>
             </div>
             
-            {/* 即時天氣膠囊 */}
-            <div className="flex items-center gap-2.5 bg-white/80 backdrop-blur-md border border-slate-200/80 px-3.5 py-1.5 rounded-2xl shadow-sm">
+            <div className="flex items-center gap-3 bg-white/80 backdrop-blur-md border border-slate-200/80 px-4 py-2 rounded-2xl shadow-sm">
               {renderWeatherIcon()}
               <div className="flex flex-col">
-                <span className="text-sm font-bold text-gray-700 leading-none">
+                <span className="text-xl font-bold text-gray-700 leading-none">
                   {weather.temp !== '--' ? `${weather.temp}°` : '--'}
                 </span>
-                <span className="text-[10px] font-semibold text-gray-400 mt-0.5">{weather.text}</span>
+                <span className="text-[13px] font-semibold text-gray-500 mt-0.5">{weather.text}</span>
               </div>
             </div>
           </header>
 
-          <main className="p-4 max-w-lg mx-auto space-y-5">
+          <main className="p-4 max-w-lg mx-auto space-y-6">
             
-            {/* ================= TODAY 頁面 ================= */}
             {activeTab === 'today' && (
-              <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
                 
-                {/* 模塊 1: 長期計畫 */}
-                <section className="bg-gradient-to-b from-indigo-50/60 to-white backdrop-blur-xl rounded-[24px] p-5 shadow-sm border border-indigo-100/80 space-y-4">
+                <section className="bg-gradient-to-b from-indigo-50/60 to-white backdrop-blur-xl rounded-[24px] p-6 shadow-sm border border-indigo-100/80 space-y-5">
                   <div>
                     <div className="flex items-center justify-between">
-                      <h2 className="text-base font-bold flex items-center gap-2 text-indigo-950">
-                        <Icon name="target" size={20} className="text-indigo-500"/> 長期計畫
+                      <h2 className="text-xl font-bold flex items-center gap-2 text-indigo-950">
+                        <Icon name="target" size={24} className="text-indigo-500"/> 長期計畫
                       </h2>
-                      <span className="text-[11px] font-semibold text-indigo-500/80 bg-indigo-100/70 px-2 py-0.5 rounded-full">
+                      <span className="text-sm font-semibold text-indigo-500/80 bg-indigo-100/70 px-3 py-1 rounded-full">
                         {plans.length} 項
                       </span>
                     </div>
-                    <p className="text-xs text-gray-500 mt-1 font-medium">設定你的北極星，將大目標拆解執行。</p>
+                    <p className="text-sm text-gray-500 mt-2 font-medium">設定你的北極星，將大目標拆解執行。</p>
                   </div>
 
-                  {/* 輸入框 */}
                   <form onSubmit={addPlan} className="flex gap-2">
                     <input
-                      type="text"
-                      value={newPlan}
-                      onChange={(e) => setNewPlan(e.target.value)}
+                      type="text" value={newPlan} onChange={(e) => setNewPlan(e.target.value)}
                       placeholder="輸入新的長期目標..."
-                      className="flex-1 bg-white border border-indigo-200/80 rounded-xl px-3.5 py-2.5 focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 outline-none text-sm font-medium transition-all placeholder-gray-400 shadow-sm"
+                      className="flex-1 bg-white border border-indigo-200/80 rounded-xl px-4 py-3.5 focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 outline-none text-base font-medium transition-all shadow-sm"
                     />
-                    <button type="submit" className="bg-indigo-600 text-white px-3.5 py-2.5 rounded-xl shadow-sm hover:bg-indigo-700 active:scale-95 transition-all flex items-center justify-center">
-                      <Icon name="plus" size={18} />
+                    <button type="submit" className="bg-indigo-600 text-white px-5 py-3.5 rounded-xl shadow-sm hover:bg-indigo-700 active:scale-95 transition-all flex items-center justify-center">
+                      <Icon name="plus" size={22} className="text-white" />
                     </button>
                   </form>
 
-                  {/* 計畫列表 */}
-                  <div className="space-y-2.5">
+                  <div className="space-y-3">
                     {plans.map(plan => (
-                      <div key={plan.id} className="p-3 bg-white/90 border border-indigo-100 rounded-xl shadow-sm hover:border-indigo-300 transition-all group space-y-2">
+                      <div key={plan.id} className="p-4 bg-white/90 border border-indigo-100 rounded-xl shadow-sm space-y-3">
                         <div className="flex items-center justify-between gap-2">
-                          <h3 className="font-semibold text-gray-800 text-sm truncate">{plan.title}</h3>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md">
+                          <h3 className="font-semibold text-gray-800 text-lg truncate">{plan.title}</h3>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className="text-sm font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-1 rounded-md">
                               {plan.progress}%
                             </span>
-                            <button onClick={() => deletePlan(plan.id)} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:bg-red-50 rounded-full">
-                              <Icon name="x" size={14} />
+                            <button onClick={() => deletePlan(plan.id)} className="text-gray-400 hover:text-red-500 p-1.5 bg-red-50/50 rounded-full">
+                              <Icon name="x" size={18} />
                             </button>
                           </div>
                         </div>
-                        
-                        {/* 進度拉桿 */}
-                        <div className="relative flex items-center">
-                          <input 
-                            type="range" 
-                            min="0" max="100" 
-                            value={plan.progress} 
-                            onChange={(e) => updatePlanProgress(plan.id, parseInt(e.target.value))}
-                            className="w-full h-2 rounded-lg appearance-none cursor-pointer accent-indigo-600 focus:outline-none"
-                            style={{
-                              background: `linear-gradient(to right, #4f46e5 0%, #4f46e5 ${plan.progress}%, #e2e8f0 ${plan.progress}%, #e2e8f0 100%)`
-                            }}
-                          />
-                        </div>
+                        <input 
+                          type="range" min="0" max="100" value={plan.progress} onChange={(e) => updatePlanProgress(plan.id, parseInt(e.target.value))}
+                          className="w-full h-3 rounded-lg appearance-none cursor-pointer accent-indigo-600 bg-slate-200"
+                          style={{ background: `linear-gradient(to right, #4f46e5 0%, #4f46e5 ${plan.progress}%, #e2e8f0 ${plan.progress}%, #e2e8f0 100%)` }}
+                        />
                       </div>
                     ))}
                     {plans.length === 0 && (
-                      <div className="text-center py-3 bg-white/60 rounded-xl border border-dashed border-indigo-200">
-                        <p className="text-xs font-medium text-gray-400">目前沒有設定計畫，快來新增吧！</p>
-                      </div>
+                      <div className="text-center py-5 bg-white/60 rounded-xl border border-dashed border-indigo-200 text-base font-medium text-gray-400">目前沒有設定計畫，快來新增吧！</div>
                     )}
                   </div>
                 </section>
 
-                {/* 模塊 2: 任務與習慣 */}
-                <section className="bg-gradient-to-b from-slate-50/80 to-white backdrop-blur-xl rounded-[24px] p-5 shadow-sm border border-slate-200 space-y-5">
-                  <h2 className="text-base font-bold flex items-center gap-2 text-slate-800">
-                    <Icon name="check" size={20} className="text-slate-700"/> 任務與習慣
+                <section className="bg-gradient-to-b from-slate-50/80 to-white backdrop-blur-xl rounded-[24px] p-6 shadow-sm border border-slate-200 space-y-5">
+                  <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800">
+                    <Icon name="check" size={24} className="text-slate-700"/> 任務與習慣
                   </h2>
                   
-                  {/* 統一輸入框 */}
                   <form onSubmit={addItem} className="flex gap-2">
                     <select
-                      value={newItemType}
-                      onChange={(e) => setNewItemType(e.target.value)}
-                      className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-slate-200 focus:border-slate-400 transition-all cursor-pointer shadow-sm"
+                      value={newItemType} onChange={(e) => setNewItemType(e.target.value)}
+                      className="bg-white border border-slate-200 rounded-xl px-3 py-3.5 text-base font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-slate-200 transition-all shadow-sm"
                     >
                       <option value="habit">每日打卡</option>
                       <option value="todo">臨時待辦</option>
                     </select>
                     <input
-                      type="text"
-                      value={newItemText}
-                      onChange={(e) => setNewItemText(e.target.value)}
-                      placeholder={newItemType === 'habit' ? "新增打卡習慣..." : "新增待辦事項..."}
-                      className="flex-1 bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 focus:ring-2 focus:ring-slate-200 focus:border-slate-400 outline-none text-sm font-medium transition-all placeholder-gray-400 text-gray-700 shadow-sm"
+                      type="text" value={newItemText} onChange={(e) => setNewItemText(e.target.value)}
+                      placeholder={newItemType === 'habit' ? "新增習慣..." : "新增待辦..."}
+                      className="flex-1 bg-white border border-slate-200 rounded-xl px-4 py-3.5 focus:ring-2 focus:ring-slate-200 outline-none text-base font-medium transition-all shadow-sm"
                     />
-                    <button type="submit" className="bg-slate-800 text-white px-3.5 py-2.5 rounded-xl hover:bg-slate-900 active:scale-95 transition-all shadow-sm flex items-center justify-center">
-                      <Icon name="plus" size={18} />
+                    <button type="submit" className="bg-slate-800 text-white px-5 py-3.5 rounded-xl shadow-sm hover:bg-slate-900 active:scale-95 transition-all flex items-center justify-center">
+                      <Icon name="plus" size={22} className="text-white" />
                     </button>
                   </form>
 
-                  {/* 子模塊 2-1: 每日打卡 */}
-                  <div className="bg-emerald-50/40 border border-emerald-100 rounded-2xl p-4 space-y-3">
+                  <div className="bg-emerald-50/40 border border-emerald-100 rounded-2xl p-5 space-y-4">
                     <div className="flex items-center justify-between">
-                      <h3 className="text-xs font-bold text-emerald-800 uppercase tracking-wider flex items-center gap-1.5">
-                        <Icon name="sparkles" size={13} className="text-emerald-500" />
-                        每日打卡
+                      <h3 className="text-sm font-bold text-emerald-800 uppercase flex items-center gap-1.5">
+                        <Icon name="sparkles" size={18} className="text-emerald-500" />每日打卡
                       </h3>
-                      <span className="text-[11px] font-semibold text-emerald-700/80">
-                        已完成 {habits.filter(h => (todayLog.completedHabits || []).includes(h.id)).length} / {habits.length}
-                      </span>
+                      <span className="text-sm font-semibold text-emerald-700/80">已完成 {habits.filter(h => (todayLog.completedHabits || []).includes(h.id)).length} / {habits.length}</span>
                     </div>
-                    
-                    <ul className="space-y-2">
+                    <ul className="space-y-3">
                       {habits.map(habit => {
                         const isCompleted = (todayLog.completedHabits || []).includes(habit.id);
                         return (
-                          <li key={habit.id} className="flex items-center gap-3 p-2.5 rounded-xl bg-white border border-emerald-100/70 shadow-sm hover:border-emerald-200 transition-all group">
-                            <button 
-                              onClick={() => toggleHabit(habit.id)}
-                              className={`w-5 h-5 flex-shrink-0 rounded-full border-2 flex items-center justify-center transition-all duration-300 ${
-                                isCompleted ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-gray-300 text-transparent hover:border-emerald-400'
-                              }`}
-                            >
-                              <Icon name="check" size={12} />
+                          <li key={habit.id} className="flex items-center gap-3 p-3.5 rounded-xl bg-white border border-emerald-100/70 shadow-sm">
+                            <button onClick={() => toggleHabit(habit.id)} className={`w-7 h-7 shrink-0 rounded-full border-2 flex items-center justify-center ${isCompleted ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'}`}>
+                              <Icon name="check" size={16} className={isCompleted ? "text-white" : "text-transparent"} />
                             </button>
-                            <span className={`flex-1 text-sm font-medium transition-all ${isCompleted ? 'line-through text-gray-400' : 'text-gray-700'}`}>
-                              {habit.text}
-                            </span>
-                            <button onClick={() => deleteHabit(habit.id)} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-50 rounded-full">
-                              <Icon name="x" size={14} />
-                            </button>
+                            <span className={`flex-1 text-lg font-medium ${isCompleted ? 'line-through text-gray-400' : 'text-gray-700'}`}>{habit.text}</span>
+                            <button onClick={() => deleteHabit(habit.id)} className="text-gray-400 p-1.5 bg-red-50 rounded-full"><Icon name="x" size={18} /></button>
                           </li>
                         );
                       })}
-                      {habits.length === 0 && (
-                        <div className="text-center py-2.5 bg-white/60 rounded-xl border border-dashed border-emerald-200">
-                          <p className="text-xs font-medium text-emerald-600/70">尚未設定打卡習慣</p>
-                        </div>
-                      )}
+                      {habits.length === 0 && <div className="text-center py-4 bg-white/60 rounded-xl border border-dashed border-emerald-200 text-base text-emerald-600/70">尚未設定打卡習慣</div>}
                     </ul>
                   </div>
 
-                  {/* 子模塊 2-2: 臨時待辦 */}
-                  <div className="bg-amber-50/40 border border-amber-100 rounded-2xl p-4 space-y-3">
+                  <div className="bg-amber-50/40 border border-amber-100 rounded-2xl p-5 space-y-4">
                     <div className="flex items-center justify-between">
-                      <h3 className="text-xs font-bold text-amber-800 uppercase tracking-wider flex items-center gap-1.5">
-                        <Icon name="clock" size={13} className="text-amber-500" />
-                        臨時待辦
+                      <h3 className="text-sm font-bold text-amber-800 uppercase flex items-center gap-1.5">
+                        <Icon name="clock" size={18} className="text-amber-500" />臨時待辦
                       </h3>
-                      <span className="text-[11px] font-semibold text-amber-700/80">
-                        {todos.filter(t => t.date === todayStr || !t.completed).length} 項
-                      </span>
+                      <span className="text-sm font-semibold text-amber-700/80">{todos.filter(t => t.date === todayStr || !t.completed).length} 項</span>
                     </div>
-
-                    <ul className="space-y-2">
+                    <ul className="space-y-3">
                       {todos.filter(t => t.date === todayStr || !t.completed).map(todo => (
-                        <li key={todo.id} className="flex items-center gap-3 p-2.5 rounded-xl bg-white border border-amber-100/70 shadow-sm hover:border-amber-200 transition-all group">
-                          <button 
-                            onClick={() => toggleTodo(todo.id)}
-                            className={`w-5 h-5 flex-shrink-0 rounded-full border-2 flex items-center justify-center transition-all duration-300 ${
-                              todo.completed ? 'bg-amber-500 border-amber-500 text-white' : 'border-gray-300 text-transparent hover:border-amber-400'
-                            }`}
-                          >
-                            <Icon name="check" size={12} />
+                        <li key={todo.id} className="flex items-center gap-3 p-3.5 rounded-xl bg-white border border-amber-100/70 shadow-sm">
+                          <button onClick={() => toggleTodo(todo.id)} className={`w-7 h-7 shrink-0 rounded-full border-2 flex items-center justify-center ${todo.completed ? 'bg-amber-500 border-amber-500' : 'border-gray-300'}`}>
+                            <Icon name="check" size={16} className={todo.completed ? "text-white" : "text-transparent"} />
                           </button>
-                          <span className={`flex-1 text-sm font-medium transition-all ${todo.completed ? 'line-through text-gray-400' : 'text-gray-700'}`}>
-                            {todo.text}
-                          </span>
-                          <button onClick={() => deleteTodo(todo.id)} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-red-50 rounded-full">
-                            <Icon name="x" size={14} />
-                          </button>
+                          <span className={`flex-1 text-lg font-medium ${todo.completed ? 'line-through text-gray-400' : 'text-gray-700'}`}>{todo.text}</span>
+                          <button onClick={() => deleteTodo(todo.id)} className="text-gray-400 p-1.5 bg-red-50 rounded-full"><Icon name="x" size={18} /></button>
                         </li>
                       ))}
-                      {todos.length === 0 && (
-                        <div className="text-center py-2.5 bg-white/60 rounded-xl border border-dashed border-amber-200">
-                          <p className="text-xs font-medium text-amber-600/70">目前沒有臨時待辦</p>
-                        </div>
-                      )}
+                      {todos.length === 0 && <div className="text-center py-4 bg-white/60 rounded-xl border border-dashed border-amber-200 text-base text-amber-600/70">目前沒有臨時待辦</div>}
                     </ul>
                   </div>
                 </section>
               </div>
             )}
 
-            {/* ================= HEALTH 頁面 ================= */}
             {activeTab === 'health' && (
-              <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <div className="flex items-center justify-between px-1">
-                  <h2 className="text-base font-bold flex items-center gap-2 text-gray-800">
-                    <Icon name="activity" size={20} className="text-indigo-500"/> 今日身心狀態
+              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <div className="flex items-center justify-between px-2">
+                  <h2 className="text-2xl font-bold flex items-center gap-2 text-gray-800">
+                    <Icon name="activity" size={26} className="text-indigo-500"/> 今日身心狀態
                   </h2>
-                  <span className="text-xs font-medium text-emerald-600 bg-emerald-50 border border-emerald-100 px-2.5 py-0.5 rounded-full">本地保存中</span>
+                  <span className="text-sm font-medium text-emerald-600 bg-emerald-50 border border-emerald-100 px-3 py-1 rounded-full">已保存在手機</span>
                 </div>
                 
-                {/* 子模塊 1: 心情狀態 */}
-                <section className="bg-gradient-to-b from-purple-50/50 to-white backdrop-blur-xl rounded-[24px] p-5 shadow-sm border border-purple-100 space-y-4">
+                <section className="bg-gradient-to-b from-purple-50/50 to-white backdrop-blur-xl rounded-[24px] p-6 shadow-sm border border-purple-100 space-y-5">
                   <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-purple-900 uppercase tracking-wider flex items-center gap-1.5">
-                      <Icon name="smile" size={15} className="text-purple-500" />
-                      今日心情
+                    <label className="text-base font-bold text-purple-900 uppercase flex items-center gap-1.5">
+                      <Icon name="smile" size={20} className="text-purple-500" />今日心情
                     </label>
-                    <span className="text-xs font-semibold text-purple-600 bg-purple-100/70 px-2 py-0.5 rounded-full">
+                    <span className="text-sm font-semibold text-purple-600 bg-purple-100/70 px-3 py-1 rounded-full">
                       {MOODS.find(m => m.value === todayLog.mood)?.label || '未選擇'}
                     </span>
                   </div>
-                  <div className="bg-white/80 p-3.5 rounded-2xl border border-purple-100 flex justify-between px-3 shadow-sm">
+                  <div className="bg-white/80 p-5 rounded-2xl border border-purple-100 flex justify-between px-4 shadow-sm">
                     {MOODS.map(m => (
-                      <button
-                        key={m.value}
-                        onClick={() => updateTodayLog('mood', m.value)}
-                        className={`text-2xl transition-all duration-300 hover:scale-110 ${todayLog.mood === m.value ? 'scale-125 drop-shadow-md -translate-y-0.5' : 'opacity-35 grayscale hover:grayscale-0'}`}
-                        title={m.label}
-                      >
+                      <button key={m.value} onClick={() => updateTodayLog('mood', m.value)} className={`text-4xl transition-all duration-300 ${todayLog.mood === m.value ? 'scale-125 drop-shadow-md -translate-y-1' : 'opacity-40 grayscale hover:grayscale-0'}`}>
                         {m.emoji}
                       </button>
                     ))}
                   </div>
                 </section>
 
-                {/* 子模塊 2: 昨晚睡眠 (移至今日心情正下方) */}
-                <section className="bg-gradient-to-b from-sky-50/50 to-white backdrop-blur-xl rounded-[24px] p-5 shadow-sm border border-sky-100 space-y-4">
+                <section className="bg-gradient-to-b from-sky-50/50 to-white backdrop-blur-xl rounded-[24px] p-6 shadow-sm border border-sky-100 space-y-5">
                   <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-sky-900 uppercase tracking-wider flex items-center gap-1.5">
-                      <Icon name="moon" size={15} className="text-sky-500" />
-                      昨晚睡眠
+                    <label className="text-base font-bold text-sky-900 uppercase flex items-center gap-1.5">
+                      <Icon name="moon" size={20} className="text-sky-500" />昨晚睡眠
                     </label>
-                    <span className="text-xs font-semibold text-sky-600 bg-sky-100/70 px-2 py-0.5 rounded-full">
+                    <span className="text-sm font-semibold text-sky-600 bg-sky-100/70 px-3 py-1 rounded-full">
                       {todayLog.sleepHours ? `${todayLog.sleepHours} 小時` : '未記錄'}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2.5 bg-white border border-sky-200/80 rounded-xl px-4 py-2 focus-within:ring-2 focus-within:ring-sky-100 focus-within:border-sky-300 transition-all shadow-sm">
-                    <Icon name="moon" size={16} className="text-sky-400" />
-                    <input
-                      type="number"
-                      step="0.5"
-                      value={todayLog.sleepHours || ''}
-                      onChange={(e) => updateTodayLog('sleepHours', e.target.value)}
-                      placeholder="例如: 7.5 (小時)"
-                      className="flex-1 bg-transparent py-1 focus:outline-none text-gray-700 font-medium text-sm placeholder-gray-400"
-                    />
+                  <div className="flex items-center gap-3 bg-white border border-sky-200/80 rounded-xl px-5 py-4 shadow-sm focus-within:ring-2 focus-within:ring-sky-100">
+                    <Icon name="moon" size={24} className="text-sky-400 shrink-0" />
+                    <input type="number" step="0.5" value={todayLog.sleepHours || ''} onChange={(e) => updateTodayLog('sleepHours', e.target.value)} placeholder="輸入時數 (例: 7.5)" className="flex-1 bg-transparent focus:outline-none text-lg font-medium text-gray-700"/>
                   </div>
                 </section>
 
-                {/* 子模塊 3: 奶茶咖啡記錄 */}
-                <section className="bg-gradient-to-b from-amber-50/50 to-white backdrop-blur-xl rounded-[24px] p-5 shadow-sm border border-amber-100 space-y-4">
+                <section className="bg-gradient-to-b from-amber-50/50 to-white backdrop-blur-xl rounded-[24px] p-6 shadow-sm border border-amber-100 space-y-5">
                   <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
-                      <Icon name="coffee" size={15} className="text-amber-600" />
-                      奶茶與咖啡記錄
+                    <label className="text-base font-bold text-amber-950 uppercase flex items-center gap-1.5">
+                      <Icon name="coffee" size={20} className="text-amber-600" />奶茶咖啡記錄
                     </label>
-                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                      todayLog.hadBeverage === 'drank' 
-                        ? 'bg-amber-100 text-amber-800' 
-                        : 'bg-slate-100 text-slate-500'
-                    }`}>
+                    <span className={`text-sm font-semibold px-3 py-1 rounded-full ${todayLog.hadBeverage === 'drank' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-500'}`}>
                       {todayLog.hadBeverage === 'drank' ? (todayLog.beverageName || '已喝') : '今天沒喝'}
                     </span>
                   </div>
 
-                  {/* 喝了 / 沒喝 切換按鈕 */}
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <button
-                      onClick={() => {
-                        updateTodayLog('hadBeverage', 'none');
-                        updateTodayLog('beverageName', '');
-                      }}
-                      className={`py-2.5 rounded-xl text-xs font-bold border transition-all duration-300 flex items-center justify-center gap-1.5 ${
-                        todayLog.hadBeverage !== 'drank'
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200 ring-2 ring-offset-1 ring-emerald-200 shadow-sm'
-                          : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'
-                      }`}
-                    >
-                      <Icon name="check" size={14} className={todayLog.hadBeverage !== 'drank' ? 'text-emerald-600' : 'text-transparent'} />
-                      今天沒喝
+                  <div className="grid grid-cols-2 gap-3">
+                    <button onClick={() => { updateTodayLog('hadBeverage', 'none'); updateTodayLog('beverageName', ''); }}
+                      className={`py-4 rounded-xl text-base font-bold border transition-all flex items-center justify-center gap-2 ${todayLog.hadBeverage !== 'drank' ? 'bg-emerald-50 text-emerald-700 border-emerald-200 ring-2 ring-offset-1 ring-emerald-200' : 'bg-white text-gray-400 border-gray-200'}`}>
+                      <Icon name="check" size={20} className={todayLog.hadBeverage !== 'drank' ? 'text-emerald-600' : 'text-transparent'} />今天沒喝
                     </button>
-                    <button
-                      onClick={() => {
-                        if (todayLog.hadBeverage !== 'drank') {
-                          selectBeverage(todayLog.beverageName || '奶茶');
-                        }
-                      }}
-                      className={`py-2.5 rounded-xl text-xs font-bold border transition-all duration-300 flex items-center justify-center gap-1.5 ${
-                        todayLog.hadBeverage === 'drank'
-                          ? 'bg-amber-100 text-amber-800 border-amber-300 ring-2 ring-offset-1 ring-amber-200 shadow-sm'
-                          : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'
-                      }`}
-                    >
-                      <Icon name="coffee" size={14} />
-                      喝了 (選擇飲品)
+                    <button onClick={() => { if (todayLog.hadBeverage !== 'drank') selectBeverage(todayLog.beverageName || '奶茶'); }}
+                      className={`py-4 rounded-xl text-base font-bold border transition-all flex items-center justify-center gap-2 ${todayLog.hadBeverage === 'drank' ? 'bg-amber-100 text-amber-800 border-amber-300 ring-2 ring-offset-1 ring-amber-200' : 'bg-white text-gray-400 border-gray-200'}`}>
+                      <Icon name="coffee" size={20} className={todayLog.hadBeverage === 'drank' ? 'text-amber-800' : 'text-gray-400'}/>喝了 (選飲品)
                     </button>
                   </div>
 
-                  {/* 喝了之後展開：三個淺色快捷按鈕 (奶茶、咖啡、果茶) 與 飲用時間 */}
                   {todayLog.hadBeverage === 'drank' && (
-                    <div className="mt-3 p-4 bg-amber-50/70 rounded-2xl border border-amber-200/70 space-y-3 animate-in slide-in-from-top-2 fade-in duration-300">
-                      <label className="block text-[11px] font-bold text-amber-900 uppercase tracking-wider">選擇飲用項目</label>
-                      
-                      {/* 三個淺色選項按鈕 */}
-                      <div className="grid grid-cols-3 gap-2">
+                    <div className="mt-4 p-5 bg-amber-50/70 rounded-2xl border border-amber-200/70 space-y-4">
+                      <label className="block text-sm font-bold text-amber-900 uppercase">點擊選擇飲用項目</label>
+                      <div className="grid grid-cols-3 gap-3">
                         {BEVERAGE_OPTIONS.map(opt => (
-                          <button
-                            key={opt.id}
-                            onClick={() => selectBeverage(opt.label)}
-                            className={`py-2.5 px-2 rounded-xl text-xs font-bold border transition-all duration-200 flex items-center justify-center gap-1 shadow-sm ${
-                              todayLog.beverageName === opt.label
-                                ? 'bg-amber-100 text-amber-900 border-amber-300 ring-2 ring-offset-1 ring-amber-200 scale-[1.02]'
-                                : 'bg-white/90 text-slate-600 border-amber-100 hover:bg-amber-50/60'
-                            }`}
-                          >
-                            <span className="text-sm">{opt.emoji}</span>
-                            <span>{opt.label}</span>
+                          <button key={opt.id} onClick={() => selectBeverage(opt.label)}
+                            className={`py-4 px-2 rounded-xl text-base font-bold border transition-all flex flex-col items-center justify-center gap-2 shadow-sm ${todayLog.beverageName === opt.label ? 'bg-amber-100 text-amber-900 border-amber-300 ring-2 ring-offset-1 ring-amber-200 scale-105' : 'bg-white/90 text-slate-600 border-amber-100'}`}>
+                            <span className="text-3xl">{opt.emoji}</span><span>{opt.label}</span>
                           </button>
                         ))}
                       </div>
-
-                      {/* 什麼時候喝 */}
-                      <div className="flex items-center gap-2.5 bg-white border border-amber-200/70 rounded-xl px-3 py-2 shadow-sm focus-within:ring-1 focus-within:ring-amber-300 transition-all mt-2">
-                        <Icon name="clock" size={15} className="text-amber-600 shrink-0" />
-                        <input
-                          type="text"
-                          value={beverageTimeInput}
-                          onChange={(e) => setBeverageTimeInput(e.target.value)}
-                          onBlur={() => updateTodayLog('beverageTime', beverageTimeInput)}
-                          placeholder="什麼時候喝 (例: 下午兩點、早上十點)"
-                          className="flex-1 bg-transparent py-0.5 focus:outline-none text-gray-700 font-medium text-xs placeholder-gray-400"
-                        />
+                      <div className="flex items-center gap-3 bg-white border border-amber-200/70 rounded-xl px-5 py-4 shadow-sm focus-within:ring-2 focus-within:ring-amber-300 mt-3">
+                        <Icon name="clock" size={22} className="text-amber-600 shrink-0" />
+                        <input type="text" value={beverageTimeInput} onChange={(e) => setBeverageTimeInput(e.target.value)} onBlur={() => updateTodayLog('beverageTime', beverageTimeInput)} placeholder="什麼時候喝 (例: 下午兩點)" className="flex-1 bg-transparent focus:outline-none text-lg text-gray-700"/>
                       </div>
                     </div>
                   )}
                 </section>
 
-                {/* 子模塊 4: 偏頭痛情況 */}
-                <section className="bg-gradient-to-b from-rose-50/50 to-white backdrop-blur-xl rounded-[24px] p-5 shadow-sm border border-rose-100 space-y-4">
+                <section className="bg-gradient-to-b from-rose-50/50 to-white backdrop-blur-xl rounded-[24px] p-6 shadow-sm border border-rose-100 space-y-5">
                   <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-rose-900 uppercase tracking-wider flex items-center gap-1.5">
-                      <Icon name="activity" size={15} className="text-rose-500" />
-                      偏頭痛情況
+                    <label className="text-base font-bold text-rose-900 uppercase flex items-center gap-1.5">
+                      <Icon name="activity" size={20} className="text-rose-500" />偏頭痛情況
                     </label>
-                    <span className="text-xs font-semibold text-rose-600 bg-rose-100/70 px-2 py-0.5 rounded-full">
+                    <span className="text-sm font-semibold text-rose-600 bg-rose-100/70 px-3 py-1 rounded-full">
                       {MIGRAINE_LEVELS.find(l => l.value === todayLog.migraine)?.label || '無'}
                     </span>
                   </div>
-                  
                   <div className="grid grid-cols-4 gap-2">
                     {MIGRAINE_LEVELS.map(level => (
-                      <button
-                        key={level.value}
-                        onClick={() => updateTodayLog('migraine', level.value)}
-                        className={`py-2.5 rounded-xl text-xs font-bold border transition-all duration-300
-                          ${todayLog.migraine === level.value ? level.color + ' ring-2 ring-offset-1 ring-rose-200 scale-[1.02] shadow-sm' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50 hover:text-gray-600'}
-                        `}
-                      >
+                      <button key={level.value} onClick={() => updateTodayLog('migraine', level.value)} className={`py-4 rounded-xl text-base font-bold border transition-all ${todayLog.migraine === level.value ? level.color + ' ring-2 ring-offset-1 ring-rose-200 scale-105 shadow-sm' : 'bg-white text-gray-400 border-gray-200'}`}>
                         {level.label}
                       </button>
                     ))}
                   </div>
-
-                  {/* 偏頭痛補充資訊展開 */}
                   {todayLog.migraine > 0 && (
-                    <div className="mt-3 p-4 bg-rose-50/80 rounded-2xl border border-rose-200/80 space-y-3 animate-in slide-in-from-top-2 fade-in duration-300">
-                      <label className="block text-[11px] font-bold text-rose-800 uppercase tracking-wider">詳細記錄</label>
-                      <div className="flex items-center gap-2.5 bg-white border border-rose-200/70 rounded-xl px-3 py-2 shadow-sm focus-within:ring-1 focus-within:ring-rose-300 transition-all">
-                        <Icon name="clock" size={15} className="text-rose-500" />
-                        <input
-                          type="text"
-                          value={migraineTimeInput}
-                          onChange={(e) => setMigraineTimeInput(e.target.value)}
-                          onBlur={() => updateTodayLog('migraineStartTime', migraineTimeInput)}
-                          placeholder="開始時間 (例: 下午兩點)"
-                          className="flex-1 bg-transparent py-0.5 focus:outline-none text-gray-700 font-medium text-xs placeholder-gray-400"
-                        />
+                    <div className="mt-4 p-5 bg-rose-50/80 rounded-2xl border border-rose-200/80 space-y-4">
+                      <label className="block text-sm font-bold text-rose-800 uppercase">詳細記錄</label>
+                      <div className="flex items-center gap-3 bg-white border border-rose-200/70 rounded-xl px-5 py-4 shadow-sm">
+                        <Icon name="clock" size={22} className="text-rose-500 shrink-0" /><input type="text" value={migraineTimeInput} onChange={(e) => setMigraineTimeInput(e.target.value)} onBlur={() => updateTodayLog('migraineStartTime', migraineTimeInput)} placeholder="開始時間" className="flex-1 bg-transparent text-lg focus:outline-none"/>
                       </div>
-                      <div className="flex items-center gap-2.5 bg-white border border-rose-200/70 rounded-xl px-3 py-2 shadow-sm focus-within:ring-1 focus-within:ring-rose-300 transition-all">
-                        <Icon name="zap" size={15} className="text-rose-500" />
-                        <input
-                          type="text"
-                          value={migraineTriggerInput}
-                          onChange={(e) => setMigraineTriggerInput(e.target.value)}
-                          onBlur={() => updateTodayLog('migraineTrigger', migraineTriggerInput)}
-                          placeholder="可能誘因 (例: 壓力、沒睡好)"
-                          className="flex-1 bg-transparent py-0.5 focus:outline-none text-gray-700 font-medium text-xs placeholder-gray-400"
-                        />
+                      <div className="flex items-center gap-3 bg-white border border-rose-200/70 rounded-xl px-5 py-4 shadow-sm">
+                        <Icon name="zap" size={22} className="text-rose-500 shrink-0" /><input type="text" value={migraineTriggerInput} onChange={(e) => setMigraineTriggerInput(e.target.value)} onBlur={() => updateTodayLog('migraineTrigger', migraineTriggerInput)} placeholder="可能誘因" className="flex-1 bg-transparent text-lg focus:outline-none"/>
                       </div>
-                      <div className="flex items-center gap-2.5 bg-white border border-rose-200/70 rounded-xl px-3 py-2 shadow-sm focus-within:ring-1 focus-within:ring-rose-300 transition-all">
-                        <Icon name="pill" size={15} className="text-rose-500" />
-                        <input
-                          type="text"
-                          value={medicationInput}
-                          onChange={(e) => setMedicationInput(e.target.value)}
-                          onBlur={() => updateTodayLog('migraineMedication', medicationInput)}
-                          placeholder="服用藥物 (如不需服藥請留白)"
-                          className="flex-1 bg-transparent py-0.5 focus:outline-none text-gray-700 font-medium text-xs placeholder-gray-400"
-                        />
+                      <div className="flex items-center gap-3 bg-white border border-rose-200/70 rounded-xl px-5 py-4 shadow-sm">
+                        <Icon name="pill" size={22} className="text-rose-500 shrink-0" /><input type="text" value={medicationInput} onChange={(e) => setMedicationInput(e.target.value)} onBlur={() => updateTodayLog('migraineMedication', medicationInput)} placeholder="服用藥物" className="flex-1 bg-transparent text-lg focus:outline-none"/>
                       </div>
                     </div>
                   )}
                 </section>
 
-                {/* 模塊 5: 身心歷史回顧 (極簡單行版，整合飲品標籤) */}
-                <section className="bg-white backdrop-blur-xl rounded-[24px] p-5 shadow-sm border border-slate-200 space-y-3.5">
+                <section className="bg-white backdrop-blur-xl rounded-[24px] p-6 shadow-sm border border-slate-200 space-y-4">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                      <Icon name="history" size={14} className="text-indigo-500" />
-                      過往身心紀錄
-                    </h3>
-                    <span className="text-xs text-slate-400 font-medium">
-                      {validHealthLogs.length} 天紀錄
-                    </span>
+                    <h3 className="text-base font-bold text-slate-700 uppercase flex items-center gap-1.5"><Icon name="history" size={20} className="text-indigo-500" />過往身心紀錄</h3>
+                    <span className="text-sm text-slate-400 font-medium">{validHealthLogs.length} 天紀錄</span>
                   </div>
-
-                  <div className="space-y-1.5">
-                    {validHealthLogs.length === 0 ? (
-                      <div className="text-center py-6 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                        <p className="text-xs font-medium text-gray-400">目前尚無歷史記錄，記錄後會在此保存！</p>
-                      </div>
-                    ) : (
-                      displayedHealthLogs.map(log => {
-                        const moodObj = MOODS.find(m => m.value === log.mood);
-                        const migraineObj = MIGRAINE_LEVELS.find(l => l.value === log.migraine);
-                        const isToday = log.id === todayStr;
-
-                        return (
-                          <div key={log.id} className="flex items-center justify-between px-3 py-2 bg-slate-50/80 hover:bg-slate-100/80 border border-slate-200/70 rounded-xl text-xs transition-colors">
-                            {/* 左側：日期 */}
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <span className={`font-bold px-1.5 py-0.5 rounded text-[11px] ${isToday ? 'bg-indigo-600 text-white' : 'text-slate-600 bg-slate-200/80'}`}>
-                                {isToday ? '今日' : log.id.slice(5)}
-                              </span>
-                            </div>
-
-                            {/* 右側：單行數據指標 */}
-                            <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto">
-                              {/* 心情 */}
-                              <span className="text-sm" title={moodObj ? `心情: ${moodObj.label}` : '未記錄心情'}>
-                                {moodObj ? moodObj.emoji : '➖'}
-                              </span>
-
-                              {/* 奶茶/咖啡/果茶 */}
-                              {log.hadBeverage === 'drank' ? (
-                                <span className="text-[10px] font-semibold text-amber-800 bg-amber-50 border border-amber-200/70 px-1.5 py-0.5 rounded flex items-center gap-0.5 max-w-[90px] truncate" title={`${log.beverageName || '飲品'} (${log.beverageTime || '當日'})`}>
-                                  <Icon name="coffee" size={10} className="text-amber-600 shrink-0" />
-                                  <span className="truncate">{log.beverageName || '已喝'}</span>
-                                </span>
-                              ) : (
-                                <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">無飲</span>
-                              )}
-
-                              {/* 睡眠時數 */}
-                              <span className="text-[11px] font-semibold text-sky-700 bg-sky-50 border border-sky-100 px-1.5 py-0.5 rounded flex items-center gap-1">
-                                <Icon name="moon" size={10} className="text-sky-500" />
-                                {log.sleepHours ? `${log.sleepHours}h` : '--'}
-                              </span>
-
-                              {/* 偏頭痛狀態標籤 */}
-                              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${migraineObj ? migraineObj.color : 'bg-slate-100 text-slate-400 border-slate-200'}`}>
-                                頭痛: {migraineObj ? migraineObj.label : '無'}
-                              </span>
-                            </div>
+                  <div className="space-y-3">
+                    {validHealthLogs.length === 0 ? <div className="text-center py-6 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-base text-gray-400">目前尚無記錄</div> : displayedHealthLogs.map(log => {
+                      const moodObj = MOODS.find(m => m.value === log.mood);
+                      const migraineObj = MIGRAINE_LEVELS.find(l => l.value === log.migraine);
+                      return (
+                        <div key={log.id} className="flex items-center justify-between px-4 py-3 bg-slate-50/80 border border-slate-200/70 rounded-xl transition-colors">
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className={`font-bold px-2 py-1 rounded text-sm ${log.id === todayStr ? 'bg-indigo-600 text-white' : 'text-slate-600 bg-slate-200/80'}`}>{log.id === todayStr ? '今日' : log.id.slice(5)}</span>
                           </div>
-                        );
-                      })
-                    )}
+                          <div className="flex items-center gap-2 shrink-0 overflow-x-auto">
+                            <span className="text-xl">{moodObj ? moodObj.emoji : '➖'}</span>
+                            {log.hadBeverage === 'drank' ? <span className="text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200/70 px-2 py-1 rounded flex items-center gap-1"><Icon name="coffee" size={14}/>{log.beverageName || '飲品'}</span> : <span className="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded">無飲</span>}
+                            <span className="text-xs font-semibold text-sky-700 bg-sky-50 border border-sky-100 px-2 py-1 rounded flex items-center gap-1"><Icon name="moon" size={14}/>{log.sleepHours ? `${log.sleepHours}h` : '--'}</span>
+                            <span className={`text-xs font-semibold px-2 py-1 rounded border ${migraineObj ? migraineObj.color : 'bg-slate-100 text-slate-400'}`}>頭痛: {migraineObj ? migraineObj.label : '無'}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-
-                  {/* 展開 / 收起按鈕 */}
                   {validHealthLogs.length > 5 && (
-                    <button
-                      onClick={() => setShowAllHealthLogs(!showAllHealthLogs)}
-                      className="w-full py-2 bg-slate-50 hover:bg-slate-100 text-slate-500 text-[11px] font-semibold rounded-xl border border-slate-200/80 flex items-center justify-center gap-1 transition-all mt-1"
-                    >
-                      {showAllHealthLogs ? (
-                        <>
-                          <span>收起歷史記錄</span>
-                          <Icon name="chevron-up" size={13} />
-                        </>
-                      ) : (
-                        <>
-                          <span>展開更多紀錄 ({validHealthLogs.length - 5} 筆)</span>
-                          <Icon name="chevron-down" size={13} />
-                        </>
-                      )}
+                    <button onClick={() => setShowAllHealthLogs(!showAllHealthLogs)} className="w-full py-4 bg-slate-50 text-slate-500 text-base font-bold rounded-xl border border-slate-200/80 flex items-center justify-center gap-1 mt-3 hover:bg-slate-100 transition-colors">
+                      {showAllHealthLogs ? <><span>收起記錄</span><Icon name="chevron-up" size={20} /></> : <><span>展開更多</span><Icon name="chevron-down" size={20} /></>}
                     </button>
                   )}
                 </section>
               </div>
             )}
 
-            {/* ================= JOURNAL 頁面 ================= */}
             {activeTab === 'journal' && (
-              <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                
-                {/* 撰寫日記模塊 */}
-                <section className="bg-gradient-to-b from-indigo-50/50 to-white backdrop-blur-xl rounded-[24px] p-5 shadow-sm border border-indigo-100/80 flex flex-col space-y-3">
+              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <section className="bg-gradient-to-b from-indigo-50/50 to-white backdrop-blur-xl rounded-[24px] p-6 shadow-sm border border-indigo-100/80 flex flex-col space-y-4">
                   <div className="flex justify-between items-center">
-                    <h2 className="text-base font-bold flex items-center gap-2 text-gray-800">
-                      <Icon name="book" size={19} className="text-indigo-500"/> {editingDiaryId ? '編輯日記' : '撰寫新日記'}
-                    </h2>
-                    <span className="text-xs text-emerald-600 font-medium bg-emerald-50 border border-emerald-200/60 px-2.5 py-0.5 rounded-full">{saveStatus}</span>
+                    <h2 className="text-xl font-bold flex items-center gap-2 text-gray-800"><Icon name="book" size={26} className="text-indigo-500"/> {editingDiaryId ? '編輯日記' : '撰寫新日記'}</h2>
+                    <span className="text-sm text-emerald-600 font-medium bg-emerald-50 border border-emerald-200/60 px-3 py-1 rounded-full">{saveStatus}</span>
                   </div>
-                  
                   <div className="relative flex-1 flex flex-col">
-                    <textarea
-                      value={diaryInput}
-                      onChange={(e) => setDiaryInput(e.target.value)}
-                      placeholder="今天發生了什麼事？有什麼感受？寫下來吧..."
-                      className="w-full h-36 bg-white border border-indigo-100 rounded-xl p-4 pb-14 resize-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 outline-none transition-all text-gray-700 leading-relaxed font-medium placeholder-gray-400 text-sm shadow-sm"
-                    />
-                    <div className="absolute bottom-3 right-3 flex items-center gap-2">
-                      {editingDiaryId && (
-                        <button
-                          onClick={() => { setEditingDiaryId(null); setDiaryInput(''); }}
-                          className="text-gray-500 bg-gray-100 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-gray-200 transition-all"
-                        >
-                          取消
-                        </button>
-                      )}
-                      <button
-                        onClick={saveDiary}
-                        className="bg-indigo-600 text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold hover:bg-indigo-700 active:scale-95 transition-all shadow-sm flex items-center gap-1"
-                      >
-                        <Icon name="check" size={14} />
-                        {editingDiaryId ? '更新' : '發佈'}
-                      </button>
+                    <textarea value={diaryInput} onChange={(e) => setDiaryInput(e.target.value)} placeholder="今天發生了什麼事？有什麼感受？寫下來吧..." className="w-full h-48 bg-white border border-indigo-100 rounded-xl p-5 pb-16 resize-none focus:ring-2 focus:ring-indigo-200 outline-none text-gray-700 font-medium text-lg shadow-sm leading-relaxed"/>
+                    <div className="absolute bottom-4 right-4 flex items-center gap-3">
+                      {editingDiaryId && <button onClick={() => { setEditingDiaryId(null); setDiaryInput(''); }} className="text-gray-500 bg-gray-100 px-4 py-2.5 rounded-lg text-base font-bold">取消</button>}
+                      <button onClick={saveDiary} className="bg-indigo-600 text-white px-5 py-2.5 rounded-lg text-base font-bold shadow-sm flex items-center gap-1.5"><Icon name="check" size={18} className="text-white" />{editingDiaryId ? '更新' : '發佈'}</button>
                     </div>
                   </div>
                 </section>
-
-                {/* 日記紀錄列表模塊 (全新極簡單行版) */}
-                <section id="diary-history" className="bg-white backdrop-blur-xl rounded-[24px] p-5 shadow-sm border border-slate-200 space-y-3">
+                <section id="diary-history" className="bg-white backdrop-blur-xl rounded-[24px] p-6 shadow-sm border border-slate-200 space-y-4">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">所有日記紀錄</h3>
-                    <span className="text-xs text-slate-400">{diaries.length} 篇</span>
+                    <h3 className="text-base font-bold text-slate-700 uppercase tracking-wider">所有日記紀錄</h3>
+                    <span className="text-sm text-slate-400">{diaries.length} 篇</span>
                   </div>
-
-                  <div className="space-y-1.5">
-                    {diaries.length === 0 ? (
-                      <div className="text-center py-6 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                        <p className="text-xs font-medium text-gray-400">目前還沒有日記紀錄。</p>
+                  <div className="space-y-3">
+                    {diaries.length === 0 ? <div className="text-center py-8 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-base text-gray-400">目前還沒有日記紀錄。</div> : displayedDiaries.map(diary => (
+                      <div key={diary.id} onClick={() => editDiary(diary)} className="flex items-center justify-between gap-3 px-4 py-4 bg-slate-50/80 border border-slate-200/70 rounded-xl cursor-pointer hover:border-indigo-200 transition-colors">
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className={`font-bold px-2 py-1 rounded text-sm ${diary.date === todayStr ? 'bg-indigo-600 text-white' : 'text-slate-600 bg-slate-200/80'}`}>{diary.date === todayStr ? '今日' : diary.date.slice(5)}</span>
+                          <span className="text-xs text-slate-400 font-medium">{new Date(diary.createdAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}</span>
+                        </div>
+                        <p className="flex-1 text-slate-700 font-medium text-lg truncate">{diary.text}</p>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button onClick={(e) => { e.stopPropagation(); deleteDiaryItem(diary.id); }} className="p-2 text-slate-400 hover:text-red-500 bg-white rounded-md"><Icon name="x" size={18} /></button>
+                        </div>
                       </div>
-                    ) : (
-                      displayedDiaries.map(diary => {
-                        const timeStr = new Date(diary.createdAt).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
-                        const isToday = diary.date === todayStr;
-                        
-                        return (
-                          <div 
-                            key={diary.id} 
-                            onClick={() => editDiary(diary)}
-                            className="flex items-center justify-between gap-2 px-3 py-2 bg-slate-50/80 hover:bg-indigo-50/50 border border-slate-200/70 hover:border-indigo-200 rounded-xl text-xs transition-colors group cursor-pointer"
-                            title="點擊進行編輯"
-                          >
-                            {/* 左側：日期與時間 */}
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <span className={`font-bold px-1.5 py-0.5 rounded text-[11px] ${isToday ? 'bg-indigo-600 text-white' : 'text-slate-600 bg-slate-200/80'}`}>
-                                {isToday ? '今日' : diary.date.slice(5)}
-                              </span>
-                              <span className="text-[10px] text-slate-400 font-medium">{timeStr}</span>
-                            </div>
-
-                            {/* 中間：單行內容摘要 (自動省略) */}
-                            <p className="flex-1 text-slate-700 font-medium truncate text-left px-1">
-                              {diary.text}
-                            </p>
-
-                            {/* 右側：快捷操作按鈕 */}
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button 
-                                onClick={(e) => { e.stopPropagation(); editDiary(diary); }} 
-                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-white rounded transition-colors"
-                                title="編輯"
-                              >
-                                <Icon name="edit-3" size={13} />
-                              </button>
-                              <button 
-                                onClick={(e) => { e.stopPropagation(); deleteDiaryItem(diary.id); }} 
-                                className="p-1 text-slate-400 hover:text-red-500 hover:bg-white rounded transition-colors"
-                                title="刪除"
-                              >
-                                <Icon name="x" size={13} />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })
-                    )}
+                    ))}
                   </div>
-
-                  {/* 展開 / 收起按鈕 */}
                   {diaries.length > 5 && (
-                    <button
-                      onClick={() => setShowAllDiaries(!showAllDiaries)}
-                      className="w-full py-2 bg-slate-50 hover:bg-slate-100 text-slate-500 text-[11px] font-semibold rounded-xl border border-slate-200/80 flex items-center justify-center gap-1 transition-all mt-1"
-                    >
-                      {showAllDiaries ? (
-                        <>
-                          <span>收起過往日記</span>
-                          <Icon name="chevron-up" size={13} />
-                        </>
-                      ) : (
-                        <>
-                          <span>展開更多日記 ({diaries.length - 5} 篇)</span>
-                          <Icon name="chevron-down" size={13} />
-                        </>
-                      )}
+                    <button onClick={() => setShowAllDiaries(!showAllDiaries)} className="w-full py-4 bg-slate-50 text-slate-500 text-base font-bold rounded-xl border border-slate-200/80 flex items-center justify-center gap-1 mt-3 hover:bg-slate-100 transition-colors">
+                      {showAllDiaries ? <><span>收起日記</span><Icon name="chevron-up" size={20} /></> : <><span>展開更多</span><Icon name="chevron-down" size={20} /></>}
                     </button>
                   )}
                 </section>
               </div>
             )}
 
-            {/* ================= INSIGHTS 頁面 ================= */}
             {activeTab === 'insights' && (
-              <div className="space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <section className="bg-white backdrop-blur-xl rounded-[24px] p-5 shadow-sm border border-slate-200 space-y-6">
-                  <h2 className="text-base font-bold flex items-center gap-2 text-gray-800">
-                    <Icon name="brain" size={20} className="text-indigo-500"/> 數據洞察
-                  </h2>
-
+              <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <section className="bg-white backdrop-blur-xl rounded-[24px] p-6 shadow-sm border border-slate-200 space-y-8">
+                  <h2 className="text-xl font-bold flex items-center gap-2 text-gray-800"><Icon name="brain" size={26} className="text-indigo-500"/> 數據洞察</h2>
                   {!insights ? (
-                    <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                      <p className="text-xs font-medium text-gray-400">資料收集中，記錄幾天後再來看看分析吧！</p>
-                    </div>
+                    <div className="text-center py-12 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-base font-medium text-gray-400">資料收集中，記錄幾天後再來看看吧！</div>
                   ) : (
-                    <div className="space-y-6">
-                      {/* 核心數據卡片模塊 */}
-                      <div className="grid grid-cols-2 gap-3.5">
-                        <div className="bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-2xl p-4 text-center shadow-sm text-white relative overflow-hidden border border-indigo-400/30">
-                          <div className="absolute -right-3 -bottom-3 opacity-20"><Icon name="moon" size={65}/></div>
-                          <div className="text-3xl font-bold mb-0.5">{insights.avgSleep} <span className="text-sm font-medium opacity-80">h</span></div>
-                          <div className="text-[10px] font-semibold tracking-wider uppercase opacity-90">平均睡眠</div>
+                    <div className="space-y-8">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="bg-gradient-to-br from-indigo-500 to-indigo-600 rounded-2xl p-6 text-center shadow-sm text-white relative overflow-hidden">
+                          <div className="absolute -right-3 -bottom-3 opacity-20"><Icon name="moon" size={80} className="text-white"/></div>
+                          <div className="text-4xl font-bold mb-1">{insights.avgSleep} <span className="text-lg font-medium opacity-80">h</span></div>
+                          <div className="text-sm font-bold tracking-wider uppercase opacity-90">平均睡眠</div>
                         </div>
-                        <div className="bg-gradient-to-br from-rose-500 to-orange-500 rounded-2xl p-4 text-center shadow-sm text-white relative overflow-hidden border border-rose-400/30">
-                          <div className="absolute -right-3 -bottom-3 opacity-20"><Icon name="activity" size={65}/></div>
-                          <div className="text-3xl font-bold mb-0.5">{insights.migraineRate}<span className="text-sm font-medium opacity-80">%</span></div>
-                          <div className="text-[10px] font-semibold tracking-wider uppercase opacity-90">偏頭痛機率</div>
-                        </div>
-                      </div>
-
-                      {/* 交叉分析模塊 */}
-                      <div className="bg-slate-50/70 rounded-2xl p-4 space-y-3 border border-slate-200">
-                        <h3 className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
-                          <Icon name="line-chart" size={15} className="text-indigo-500" /> 交叉關聯分析
-                        </h3>
-                        
-                        <div className="space-y-2 text-xs text-gray-600">
-                          <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-100">
-                            <span className="font-medium">發作偏頭痛時，平均睡眠</span>
-                            <span className="text-base font-bold text-rose-600">{insights.correlation.avgSleepMigraine} <span className="text-xs text-rose-300">h</span></span>
-                          </div>
-                          <div className="flex justify-between items-center bg-white p-2.5 rounded-xl border border-slate-100">
-                            <span className="font-medium">無偏頭痛時，平均睡眠</span>
-                            <span className="text-base font-bold text-emerald-600">{insights.correlation.avgSleepNoMigraine} <span className="text-xs text-emerald-300">h</span></span>
-                          </div>
-                          
-                          {insights.correlation.avgSleepMigraine !== '無數據' && insights.correlation.avgSleepNoMigraine !== '無數據' && (
-                            <div className="text-[11px] font-medium text-indigo-700 mt-2 bg-indigo-50/80 p-2.5 rounded-xl border border-indigo-100 leading-relaxed text-center">
-                              💡 系統觀察：這可能暗示了睡眠時間與你的偏頭痛頻率存在關聯性。
-                            </div>
-                          )}
+                        <div className="bg-gradient-to-br from-rose-500 to-orange-500 rounded-2xl p-6 text-center shadow-sm text-white relative overflow-hidden">
+                          <div className="absolute -right-3 -bottom-3 opacity-20"><Icon name="activity" size={80} className="text-white"/></div>
+                          <div className="text-4xl font-bold mb-1">{insights.migraineRate}<span className="text-lg font-medium opacity-80">%</span></div>
+                          <div className="text-sm font-bold tracking-wider uppercase opacity-90">偏頭痛機率</div>
                         </div>
                       </div>
-
-                      {/* 最近 7 天紀錄模塊 */}
-                      <div className="space-y-3">
-                        <h3 className="font-bold text-slate-800 text-xs">最近 7 天紀錄</h3>
-                        <div className="flex gap-2.5 overflow-x-auto pb-2 snap-x hide-scrollbar">
+                      <div className="bg-slate-50/70 rounded-2xl p-5 space-y-4 border border-slate-200">
+                        <h3 className="font-bold text-slate-800 text-base flex items-center gap-2"><Icon name="line-chart" size={20} className="text-indigo-500" /> 交叉關聯分析</h3>
+                        <div className="space-y-3 text-sm text-gray-600">
+                          <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-100">
+                            <span className="font-semibold text-base">發作偏頭痛時，平均睡眠</span><span className="text-xl font-bold text-rose-600">{insights.correlation.avgSleepMigraine} <span className="text-base text-rose-400">h</span></span>
+                          </div>
+                          <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-100">
+                            <span className="font-semibold text-base">無偏頭痛時，平均睡眠</span><span className="text-xl font-bold text-emerald-600">{insights.correlation.avgSleepNoMigraine} <span className="text-base text-emerald-400">h</span></span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="space-y-4">
+                        <h3 className="font-bold text-slate-800 text-base">最近 7 天紀錄</h3>
+                        <div className="flex gap-3 overflow-x-auto pb-2 snap-x hide-scrollbar">
                           {allLogs.slice(0, 7).map(log => (
-                            <div key={log.id} className="snap-center shrink-0 w-14 text-center">
-                              <div className="text-[10px] font-semibold text-gray-400 mb-1.5 uppercase">{log.id.slice(5)}</div>
-                              <div className="h-16 w-full bg-slate-50 rounded-xl shadow-sm border border-slate-200 flex flex-col items-center justify-center gap-1.5 transition-all hover:scale-105">
-                                <span className="text-lg">{MOODS.find(m => m.value === log.mood)?.emoji || '➖'}</span>
-                                {log.migraine > 0 && <div className="w-2 h-2 rounded-full bg-rose-400"></div>}
+                            <div key={log.id} className="snap-center shrink-0 w-16 text-center">
+                              <div className="text-sm font-bold text-gray-400 mb-2 uppercase">{log.id.slice(5)}</div>
+                              <div className="h-20 w-full bg-slate-50 rounded-xl shadow-sm border border-slate-200 flex flex-col items-center justify-center gap-2">
+                                <span className="text-2xl">{MOODS.find(m => m.value === log.mood)?.emoji || '➖'}</span>
+                                {log.migraine > 0 && <div className="w-3 h-3 rounded-full bg-rose-400"></div>}
                               </div>
                             </div>
                           ))}
@@ -1072,33 +752,37 @@
                       </div>
                     </div>
                   )}
+
+                  <div className="mt-8 pt-8 border-t border-slate-200 space-y-5">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-800 uppercase flex items-center gap-2"><Icon name="database" size={22} className="text-indigo-500" />資料備份與還原</h3>
+                      <p className="text-sm text-slate-500 mt-2 leading-relaxed">你的資料目前安全保存在此設備的瀏覽器中。你可以隨時下載備份，以防清理快取或更換手機時丟失。</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <button onClick={handleExport} className="flex flex-col items-center justify-center gap-2 p-5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-2xl text-indigo-700 shadow-sm transition-all active:scale-95">
+                        <Icon name="download" size={32} className="text-indigo-600" />
+                        <span className="text-base font-bold">下載備份</span>
+                      </button>
+                      <label className="flex flex-col items-center justify-center gap-2 p-5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-2xl text-emerald-700 shadow-sm transition-all cursor-pointer active:scale-95">
+                        <Icon name="upload" size={32} className="text-emerald-600" />
+                        <span className="text-base font-bold">還原紀錄</span>
+                        <input type="file" accept=".json" onChange={handleImport} className="hidden" />
+                      </label>
+                    </div>
+                  </div>
                 </section>
               </div>
             )}
 
           </main>
 
-          {/* 懸浮底部導覽列 */}
           <nav className="fixed bottom-6 left-0 right-0 z-50 px-6 max-w-lg mx-auto">
-            <div className="flex justify-around items-center h-16 bg-white/90 backdrop-blur-xl shadow-lg shadow-slate-200/50 rounded-full px-2 border border-slate-200">
-              {[
-                { id: 'today', name: 'home', label: '今日' },
-                { id: 'health', name: 'activity', label: '身心' },
-                { id: 'journal', name: 'book', label: '日記' },
-                { id: 'insights', name: 'line-chart', label: '分析' },
-              ].map(tab => (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`relative flex flex-col items-center justify-center w-full h-full space-y-1 transition-all duration-300
-                    ${activeTab === tab.id ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'}
-                  `}
-                >
-                  <Icon name={tab.name} size={22} className={`transition-transform duration-300 ${activeTab === tab.id ? 'scale-110 -translate-y-1' : ''}`} />
-                  <span className={`text-[10px] font-semibold transition-opacity duration-300 ${activeTab === tab.id ? 'opacity-100' : 'opacity-0 absolute'}`}>{tab.label}</span>
-                  {activeTab === tab.id && (
-                    <div className="absolute bottom-1 w-1 h-1 bg-indigo-600 rounded-full"></div>
-                  )}
+            <div className="flex justify-around items-center h-20 bg-white/95 backdrop-blur-xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] rounded-full px-2 border border-slate-200">
+              {[ { id: 'today', name: 'home', label: '今日' }, { id: 'health', name: 'activity', label: '身心' }, { id: 'journal', name: 'book', label: '日記' }, { id: 'insights', name: 'line-chart', label: '分析' } ].map(tab => (
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`relative flex flex-col items-center justify-center w-full h-full space-y-1.5 transition-all duration-300 ${activeTab === tab.id ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'}`}>
+                  <Icon name={tab.name} size={28} className={`transition-transform duration-300 ${activeTab === tab.id ? 'scale-110 -translate-y-1' : ''}`} />
+                  <span className={`text-sm font-bold transition-opacity duration-300 ${activeTab === tab.id ? 'opacity-100' : 'opacity-0 absolute'}`}>{tab.label}</span>
+                  {activeTab === tab.id && <div className="absolute bottom-1.5 w-1.5 h-1.5 bg-indigo-600 rounded-full"></div>}
                 </button>
               ))}
             </div>
